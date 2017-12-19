@@ -134,8 +134,17 @@ protected:
 			writeBits<8+XTRA0>(last_mark, b);
 			b = pixels.loadAndScale2();
 
+			if(pixels.mUseRgbw) {
+				// Write third byte, read 4rd byte
+				writeBits<8 + XTRA0>(last_mark, b);
+				b = pixels.loadAndScale3();
+			}
+
 			// Write third byte, read 1st byte of next pixel
 			writeBits<8+XTRA0>(last_mark, b);
+
+
+
 			b = pixels.advanceAndLoadAndScale0();
 #endif // FASTLED_RGBW
 

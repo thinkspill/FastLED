@@ -13,7 +13,8 @@
 FASTLED_NAMESPACE_BEGIN
 
 #define RO(X) RGB_BYTE(RGB_ORDER, X)
-#define RGB_BYTE(RO, X) (((RO)>>(3*(2-(X)))) & 0x3)
+// special case X==3, which is gonna be white in our hacky new system....
+#define RGB_BYTE(RO, X) (X==3) ? 3 : (((RO)>>(3*(2-(X)))) & 0x3)
 
 #define RGB_BYTE0(RO) ((RO>>6) & 0x3)
 #define RGB_BYTE1(RO) ((RO>>3) & 0x3)
@@ -207,25 +208,33 @@ template<EOrder RGB_ORDER, int LANES = 1, uint32_t MASK = 0xFFFFFFFF>
 struct PixelController {
     const uint8_t *mData;
     int mLen, mLenRemaining;
-    uint8_t d[3];
-    uint8_t e[3];
-    CRGB mScale;
+    uint8_t d[4];
+    uint8_t e[4];
+    CRGBW mScale;
     int8_t mAdvance;
     int mOffsets[LANES];
+    CRGBW mCurrentPixels[LANES]; // a copy of the current mData...
+
+    bool mUseRgbw;
 
     PixelController(const PixelController &other) {
         d[0] = other.d[0];
         d[1] = other.d[1];
         d[2] = other.d[2];
+        d[3] = other.d[3];
         e[0] = other.e[0];
         e[1] = other.e[1];
         e[2] = other.e[2];
+        e[3] = other.e[3];
         mData = other.mData;
         mScale = other.mScale;
         mAdvance = other.mAdvance;
         mLenRemaining = mLen = other.mLen;
-        for (int i = 0; i < LANES; i++) { mOffsets[i] = other.mOffsets[i]; }
-
+        mUseRgbw = other.mUseRgbw;
+        for (int i = 0; i < LANES; i++) {
+            mOffsets[i] = other.mOffsets[i];
+            mCurrentPixels[i] = other.mCurrentPixels[i];
+        }
     }
 
     void initOffsets(int len) {
@@ -237,29 +246,35 @@ struct PixelController {
     }
 
     PixelController(const uint8_t *d, int len, CRGB &s, EDitherMode dither = BINARY_DITHER, bool advance = true,
-                    uint8_t skip = 0) : mData(d), mLen(len), mLenRemaining(len), mScale(s) {
+                    uint8_t skip = 0, bool useRgbw = false) : mData(d), mLen(len), mLenRemaining(len), mUseRgbw(useRgbw) {
         enable_dithering(dither);
         mData += skip;
         mAdvance = (advance) ? 3 + skip : 0;
+        mScale = CRGBW(s, useRgbw);
         initOffsets(len);
+        setCurrentPixels();
     }
 
-    PixelController(const CRGB *d, int len, CRGB &s, EDitherMode dither = BINARY_DITHER) : mData((const uint8_t *) d),
+    PixelController(const CRGB *d, int len, CRGB &s, EDitherMode dither = BINARY_DITHER , bool useRgbw = false) : mData((const uint8_t *) d),
                                                                                            mLen(len),
-                                                                                           mLenRemaining(len),
-                                                                                           mScale(s) {
+                                                                                           mUseRgbw(useRgbw),
+                                                                                           mLenRemaining(len) {
         enable_dithering(dither);
         mAdvance = 3;
+        mScale = CRGBW(s, useRgbw);
         initOffsets(len);
+        setCurrentPixels();
     }
 
-    PixelController(const CRGB &d, int len, CRGB &s, EDitherMode dither = BINARY_DITHER) : mData((const uint8_t *) &d),
+    PixelController(const CRGB &d, int len, CRGB &s, EDitherMode dither = BINARY_DITHER, bool useRgbw = false) : mData((const uint8_t *) &d),
                                                                                            mLen(len),
-                                                                                           mLenRemaining(len),
-                                                                                           mScale(s) {
+                                                                                           mUseRgbw(useRgbw),
+                                                                                           mLenRemaining(len) {
         enable_dithering(dither);
         mAdvance = 0;
+        mScale = CRGBW(s, useRgbw);
         initOffsets(len);
+        setCurrentPixels();
     }
 
     void init_binary_dithering() {
@@ -329,7 +344,8 @@ struct PixelController {
         // actual dithering.
 
         // Setup the initial D and E values
-        for (int i = 0; i < 3; i++) {
+        uint8_t colorChannels = mUseRgbw ? 4 : 3;
+        for (int i = 0; i < colorChannels; i++) {
             uint8_t s = mScale.raw[i];
             e[i] = s ? (256 / s) + 1 : 0;
             d[i] = scale8(Q, e[i]);
@@ -353,8 +369,18 @@ struct PixelController {
                 init_binary_dithering();
                 break;
             default:
-                d[0] = d[1] = d[2] = e[0] = e[1] = e[2] = 0;
+                d[0] = d[1] = d[2] = d[3] = e[0] = e[1] = e[2] = e[3] = 0;
                 break;
+        }
+    }
+
+    __attribute__((always_inline)) inline void  setCurrentPixels() {
+        for (int i = 0; i < LANES; i++) {
+            mCurrentPixels[i] = CRGBW(
+                    mData[mOffsets[i] + 0],
+                    mData[mOffsets[i] + 1],
+                    mData[mOffsets[i] + 2],
+                    mUseRgbw);
         }
     }
 
@@ -367,6 +393,7 @@ struct PixelController {
     __attribute__((always_inline)) inline void advanceData() {
         mData += mAdvance;
         mLenRemaining--;
+        setCurrentPixels();
     }
 
     // step the dithering forward
@@ -376,6 +403,7 @@ struct PixelController {
         d[0] = e[0] - d[0];
         d[1] = e[1] - d[1];
         d[2] = e[2] - d[2];
+        d[3] = e[3] - d[3];
     }
 
     // Some chipsets pre-cycle the first byte, which means we want to cycle byte 0's dithering separately
@@ -384,11 +412,13 @@ struct PixelController {
     }
 
     template<int SLOT>
-    __attribute__((always_inline)) inline static uint8_t loadByte(PixelController &pc) { return pc.mData[RO(SLOT)]; }
+    __attribute__((always_inline)) inline static uint8_t loadByte(PixelController &pc) {
+        return pc.mCurrentPixels[0].raw[RO(SLOT)];
+    }
 
     template<int SLOT>
     __attribute__((always_inline)) inline static uint8_t loadByte(PixelController &pc, int lane) {
-        return pc.mData[pc.mOffsets[lane] + RO(SLOT)];
+        return pc.mCurrentPixels[lane].raw[RO(SLOT)];
     }
 
     template<int SLOT>
@@ -458,6 +488,8 @@ struct PixelController {
 
     __attribute__((always_inline)) inline uint8_t loadAndScale2(int lane) { return loadAndScale<2>(*this, lane); }
 
+    __attribute__((always_inline)) inline uint8_t loadAndScale3(int lane) { return loadAndScale<3>(*this, lane); }
+
     __attribute__((always_inline)) inline uint8_t advanceAndLoadAndScale0(int lane) {
         return advanceAndLoadAndScale<0>(*this, lane);
     }
@@ -473,6 +505,8 @@ struct PixelController {
 
     __attribute__((always_inline)) inline uint8_t loadAndScale2() { return loadAndScale<2>(*this); }
 
+    __attribute__((always_inline)) inline uint8_t loadAndScale3() { return loadAndScale<3>(*this); }
+
     __attribute__((always_inline)) inline uint8_t advanceAndLoadAndScale0() { return advanceAndLoadAndScale<0>(*this); }
 
     __attribute__((always_inline)) inline uint8_t stepAdvanceAndLoadAndScale0() {
@@ -481,7 +515,7 @@ struct PixelController {
     }
 };
 
-template<EOrder RGB_ORDER, int LANES = 1, uint32_t MASK = 0xFFFFFFFF>
+template<EOrder RGB_ORDER, int LANES = 1, uint32_t MASK = 0xFFFFFFFF, bool USE_RGBW = false>
 class CPixelLEDController : public CLEDController {
 protected:
     virtual void showPixels(PixelController<RGB_ORDER, LANES, MASK> &pixels) = 0;
@@ -491,7 +525,7 @@ protected:
     ///@param nLeds the numner of leds to set to this color
     ///@param scale the rgb scaling value for outputting color
     virtual void showColor(const struct CRGB &data, int nLeds, CRGB scale) {
-        PixelController<RGB_ORDER, LANES, MASK> pixels(data, nLeds, scale, getDither());
+        PixelController<RGB_ORDER, LANES, MASK> pixels(data, nLeds, scale, getDither(), USE_RGBW);
         showPixels(pixels);
     }
 
@@ -500,7 +534,7 @@ protected:
 ///@param nLeds the number of leds being written out
 ///@param scale the rgb scaling to apply to each led before writing it out
     virtual void show(const struct CRGB *data, int nLeds, CRGB scale) {
-        PixelController<RGB_ORDER, LANES, MASK> pixels(data, nLeds, scale, getDither());
+        PixelController<RGB_ORDER, LANES, MASK> pixels(data, nLeds, scale, getDither(), USE_RGBW);
         showPixels(pixels);
     }
 
