@@ -884,6 +884,16 @@ struct CRGBW {
     {
     }
 
+    /// allow assignment from one RGB struct to another
+    inline CRGBW& operator= (const CRGBW& rhs) __attribute__((always_inline))
+    {
+        r = rhs.r;
+        g = rhs.g;
+        b = rhs.b;
+        w = rhs.w;
+        return *this;
+    }
+
     /// allow construction from R, G, B
     inline CRGBW( uint8_t ir, uint8_t ig, uint8_t ib, bool makeWhite = false)  __attribute__((always_inline))
     {
@@ -896,6 +906,7 @@ struct CRGBW {
         r = ir - w;
         g = ig - w;
         b = ib - w;
+        //Serial.printf("%0x,%0x,%0x -> %0x,%0x,%0x,%0x: %0x\n", ir, ig, ib, r,g,b,w, makeWhite);
     }
 
 
@@ -912,8 +923,16 @@ struct CRGBW {
         g = rhs.g - w;
         b = rhs.b - w;
     }
+
 };
 
+__attribute__((always_inline))
+inline CRGBW makeScaleStruct( const CRGB& scale, bool useWhite = false)
+{
+    CRGBW s = CRGBW(scale.r, scale.g, scale.b, false);
+    s.w = useWhite ? max(scale.r, max(scale.g, scale.b)) : 0;
+    return s;
+}
 
 /// RGB orderings, used when instantiating controllers to determine what
 /// order the controller should send RGB data out in, RGB being the default

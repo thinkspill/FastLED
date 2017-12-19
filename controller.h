@@ -12,9 +12,9 @@
 
 FASTLED_NAMESPACE_BEGIN
 
-#define RO(X) RGB_BYTE(RGB_ORDER, X)
 // special case X==3, which is gonna be white in our hacky new system....
-#define RGB_BYTE(RO, X) (X==3) ? 3 : (((RO)>>(3*(2-(X)))) & 0x3)
+#define RO(X) ( ( X < 3 ) ? RGB_BYTE(RGB_ORDER, X) : 3)
+#define RGB_BYTE(RO, X) (((RO)>>(3*(2-(X)))) & 0x3)
 
 #define RGB_BYTE0(RO) ((RO>>6) & 0x3)
 #define RGB_BYTE1(RO) ((RO>>3) & 0x3)
@@ -24,6 +24,7 @@ FASTLED_NAMESPACE_BEGIN
 
 #define DISABLE_DITHER 0x00
 #define BINARY_DITHER 0x01
+
 typedef uint8_t EDitherMode;
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -250,7 +251,7 @@ struct PixelController {
         enable_dithering(dither);
         mData += skip;
         mAdvance = (advance) ? 3 + skip : 0;
-        mScale = CRGBW(s, useRgbw);
+        mScale = makeScaleStruct(s, useRgbw);
         initOffsets(len);
         setCurrentPixels();
     }
@@ -261,7 +262,7 @@ struct PixelController {
                                                                                            mLenRemaining(len) {
         enable_dithering(dither);
         mAdvance = 3;
-        mScale = CRGBW(s, useRgbw);
+        mScale = makeScaleStruct(s, useRgbw);
         initOffsets(len);
         setCurrentPixels();
     }
@@ -272,7 +273,7 @@ struct PixelController {
                                                                                            mLenRemaining(len) {
         enable_dithering(dither);
         mAdvance = 0;
-        mScale = CRGBW(s, useRgbw);
+        mScale = makeScaleStruct(s, useRgbw);
         initOffsets(len);
         setCurrentPixels();
     }
@@ -413,6 +414,7 @@ struct PixelController {
 
     template<int SLOT>
     __attribute__((always_inline)) inline static uint8_t loadByte(PixelController &pc) {
+        //Serial.printf("%0x, %0x, %0x\n", SLOT, RO(SLOT), pc.mCurrentPixels[0].raw[RO(SLOT)]);
         return pc.mCurrentPixels[0].raw[RO(SLOT)];
     }
 
@@ -433,6 +435,8 @@ struct PixelController {
 
     template<int SLOT>
     __attribute__((always_inline)) inline static uint8_t scale(PixelController &pc, uint8_t b) {
+        //Serial.printf("%0x, %0x, %0x, %0x\n", SLOT, RO(SLOT), b, pc.mScale.raw[RO(SLOT)]);
+
         return scale8(b, pc.mScale.raw[RO(SLOT)]);
     }
 
