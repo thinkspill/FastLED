@@ -382,7 +382,7 @@ struct PixelController {
 
 template<EOrder RGB_ORDER, int LANES=1, uint32_t MASK=0xFFFFFFFF> class CPixelLEDController : public CLEDController {
 protected:
-  virtual void showPixels(PixelController<RGB_ORDER,LANES,MASK> & pixels) = 0;
+    virtual void showPixels(PixelController<RGB_ORDER,LANES,MASK> & pixels) = 0;
 
   /// set all the leds on the controller to a given color
   ///@param data the crgb color to set the leds to
