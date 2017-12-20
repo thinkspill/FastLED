@@ -52,6 +52,7 @@ public:
   }
 
   virtual void init() {
+	  // D6, D7, D5, D8, D2, D1
 		void (* funcs[])() ={initPin<12>, initPin<13>, initPin<14>, initPin<15>, initPin<4>, initPin<5>};
 
 		for (uint8_t i = 0; i < USED_LANES; ++i) {

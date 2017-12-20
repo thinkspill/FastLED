@@ -377,11 +377,20 @@ struct PixelController {
 
     __attribute__((always_inline)) inline void  setCurrentPixels() {
         for (int i = 0; i < LANES; i++) {
-            mCurrentPixels[i] = CRGBW(
-                    mData[mOffsets[i] + 0],
-                    mData[mOffsets[i] + 1],
-                    mData[mOffsets[i] + 2],
-                    mUseRgbw);
+            if(mUseRgbw) {
+                mCurrentPixels[i].w = min(
+                        mData[mOffsets[i] + 0], min(
+                        mData[mOffsets[i] + 1], mData[mOffsets[i] + 2]));
+
+                mCurrentPixels[i].r = mData[mOffsets[i] + 0] - mCurrentPixels[i].w;
+                mCurrentPixels[i].g = mData[mOffsets[i] + 1] - mCurrentPixels[i].w;
+                mCurrentPixels[i].b = mData[mOffsets[i] + 2] - mCurrentPixels[i].w;
+            } else {
+                mCurrentPixels[i].r = mData[mOffsets[i] + 0];
+                mCurrentPixels[i].g = mData[mOffsets[i] + 1];
+                mCurrentPixels[i].b = mData[mOffsets[i] + 2];
+                mCurrentPixels[i].w = mData[mOffsets[i] + 3];
+            }
         }
     }
 
