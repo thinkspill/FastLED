@@ -8,6 +8,7 @@
 #include "color.h"
 
 #define MIN(X,Y) (((X)<(Y)) ? (X):(Y))
+#define MAX(A, B) (( (A) > (B) ) ? (A) : (B))
 
 FASTLED_NAMESPACE_BEGIN
 
@@ -930,7 +931,7 @@ __attribute__((always_inline))
 inline CRGBW makeScaleStruct( const CRGB& scale, bool useWhite = false)
 {
     CRGBW s = CRGBW(scale.r, scale.g, scale.b, false);
-    s.w = useWhite ? max(scale.r, max(scale.g, scale.b)) : 0;
+    s.w = useWhite ? MAX(scale.r, MAX(scale.g, scale.b)) : 0;
     return s;
 }
 
