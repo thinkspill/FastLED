@@ -5,7 +5,7 @@
 
 #define FIX_BITS(bits) (((bits & 0x0fL) << 12) | (bits & 0x30))
 
-#define MIN(X,Y) (((X)<(Y)) ? (X):(Y))
+#define MIN(X, Y) (((X)<(Y)) ? (X):(Y))
 #define USED_LANES (MIN(LANES, 6))
 #define PORT_MASK (((1 << USED_LANES)-1) & 0x0000FFFFL)
 #define PIN_MASK FIX_BITS(PORT_MASK)
@@ -17,142 +17,206 @@ extern uint32_t _frame_cnt;
 extern uint32_t _retry_cnt;
 #endif
 
-template <uint8_t LANES, int FIRST_PIN, int T1, int T2, int T3, EOrder RGB_ORDER = GRB, int XTRA0 = 0, bool FLIP = false, int WAIT_TIME = 5>
-class InlineBlockClocklessController : public CPixelLEDController<RGB_ORDER, LANES, PORT_MASK> {
-	typedef typename FastPin<FIRST_PIN>::port_ptr_t data_ptr_t;
-	typedef typename FastPin<FIRST_PIN>::port_t data_t;
+typedef union {
+    uint8_t bytes[8];
+    uint16_t shorts[4];
+    uint32_t raw[2];
+} Lines;
 
-	CMinWait<WAIT_TIME> mWait;
-public:
-	virtual int size() { return CLEDController::size() * LANES; }
+typedef struct {
+    Lines c0;
+    Lines c1;
+    Lines c2;
+    Lines c3;
 
-	virtual void showPixels(PixelController<RGB_ORDER, LANES, PORT_MASK> & pixels) {
-		// mWait.wait();
-		/*uint32_t clocks = */
-		int cnt=FASTLED_INTERRUPT_RETRY_COUNT;
-		while(!showRGBInternal(pixels) && cnt--) {
-      os_intr_unlock();
-			#ifdef FASTLED_DEBUG_COUNT_FRAME_RETRIES
-			_retry_cnt++;
-			#endif
-      delayMicroseconds(WAIT_TIME * 10);
-      os_intr_lock();
+    template<int NUM_LANES>
+    __attribute__((always_inline)) inline  uint8_t toRgbw() {
+        for(int i=0; i < NUM_LANES; i++) {
+            c3.bytes[i] = min(c0.bytes[i], min(c1.bytes[i], c2.bytes[i]));
+            c0.bytes[i] -= c3.bytes[i];
+            c1.bytes[i] -= c3.bytes[i];
+            c2.bytes[i] -= c3.bytes[i];
+        }
     }
-		// #if FASTLED_ALLOW_INTTERUPTS == 0
-		// Adjust the timer
-		// long microsTaken = CLKS_TO_MICROS(clocks);
-		// MS_COUNTER += (1 + (microsTaken / 1000));
-		// #endif
+} RGBWLines;
 
-		// mWait.mark();
-	}
+template<uint8_t LANES, int FIRST_PIN, int T1, int T2, int T3, EOrder RGB_ORDER = GRB, int XTRA0 = 0, bool FLIP = false, int WAIT_TIME = 5>
+class InlineBlockClocklessController : public CPixelLEDController<RGB_ORDER, LANES, PORT_MASK> {
+    typedef typename FastPin<FIRST_PIN>::port_ptr_t data_ptr_t;
+    typedef typename FastPin<FIRST_PIN>::port_t data_t;
 
-  template<int PIN> static void initPin() {
-			_ESPPIN<PIN, 1<<(PIN & 0xFF)>::setOutput();
-  }
+    CMinWait<WAIT_TIME> mWait;
 
-  virtual void init() {
-		void (* funcs[])() ={initPin<12>, initPin<13>, initPin<14>, initPin<15>, initPin<4>, initPin<5>};
+public:
+    virtual int size() { return CLEDController::size() * LANES; }
 
-		for (uint8_t i = 0; i < USED_LANES; ++i) {
-			funcs[i]();
-		}
-  }
+    virtual void showPixels(PixelController<RGB_ORDER, LANES, PORT_MASK> &pixels) {
+        // mWait.wait();
+        /*uint32_t clocks = */
+        int cnt = FASTLED_INTERRUPT_RETRY_COUNT;
+        while (!showRGBInternal(pixels) && cnt--) {
+            os_intr_unlock();
+#ifdef FASTLED_DEBUG_COUNT_FRAME_RETRIES
+            _retry_cnt++;
+#endif
+            delayMicroseconds(WAIT_TIME * 10);
+            os_intr_lock();
+        }
+        // #if FASTLED_ALLOW_INTTERUPTS == 0
+        // Adjust the timer
+        // long microsTaken = CLKS_TO_MICROS(clocks);
+        // MS_COUNTER += (1 + (microsTaken / 1000));
+        // #endif
 
-  virtual uint16_t getMaxRefreshRate() const { return 400; }
+        // mWait.mark();
+    }
 
-	typedef union {
-		uint8_t bytes[8];
-		uint16_t shorts[4];
-		uint32_t raw[2];
-	} Lines;
+    template<int PIN>
+    static void initPin() {
+        _ESPPIN<PIN, 1 << (PIN & 0xFF)>::setOutput();
+    }
+
+    virtual void init() {
+        void (*funcs[])() ={initPin<12>, initPin<13>, initPin<14>, initPin<15>, initPin<4>, initPin<5>};
+
+        for (uint8_t i = 0; i < USED_LANES; ++i) {
+            funcs[i]();
+        }
+    }
+
+    virtual uint16_t getMaxRefreshRate() const { return 400; }
 
 #define ESP_ADJUST 0 // (2*(F_CPU/24000000))
 #define ESP_ADJUST2 0
-  template<int BITS,int PX> __attribute__ ((always_inline)) inline static void writeBits(register uint32_t & last_mark, register Lines & b, PixelController<RGB_ORDER, LANES, PORT_MASK> &pixels) { // , register uint32_t & b2)  {
-	  Lines b2 = b;
-		transpose8x1_noinline(b.bytes,b2.bytes);
 
-		register uint8_t d = pixels.template getd<PX>(pixels);
-		register uint8_t scale = pixels.template getscale<PX>(pixels);
+    template<int BITS, int PX>
+    __attribute__ ((always_inline)) inline static void writeBits(register uint32_t &last_mark, register Lines &b,
+                                                                 PixelController<RGB_ORDER, LANES, PORT_MASK> &pixels) { // , register uint32_t & b2)  {
+        Lines b2 = b;
+        transpose8x1_noinline(b.bytes, b2.bytes);
 
-		for(register uint32_t i = 0; i < USED_LANES; i++) {
-			while((__clock_cycles() - last_mark) < (T1+T2+T3));
-			last_mark = __clock_cycles();
-			*FastPin<FIRST_PIN>::sport() = PIN_MASK;
+#ifndef FASTLED_RGBW
+        register uint8_t d = pixels.template getd<PX>(pixels);
+        register uint8_t scale = pixels.template getscale<PX>(pixels);
+#endif
+        for (register uint32_t i = 0; i < USED_LANES; i++) {
+            while ((__clock_cycles() - last_mark) < (T1 + T2 + T3));
+            last_mark = __clock_cycles();
+            *FastPin<FIRST_PIN>::sport() = PIN_MASK;
 
-			uint32_t nword = (uint32_t)(~b2.bytes[7-i]);
-			while((__clock_cycles() - last_mark) < (T1-6));
-			*FastPin<FIRST_PIN>::cport() = FIX_BITS(nword);
+            uint32_t nword = (uint32_t) (~b2.bytes[7 - i]);
+            while ((__clock_cycles() - last_mark) < (T1 - 6));
+            *FastPin<FIRST_PIN>::cport() = FIX_BITS(nword);
 
-			while((__clock_cycles() - last_mark) < (T1+T2));
-			*FastPin<FIRST_PIN>::cport() = PIN_MASK;
+            while ((__clock_cycles() - last_mark) < (T1 + T2));
+            *FastPin<FIRST_PIN>::cport() = PIN_MASK;
 
-			b.bytes[i] = pixels.template loadAndScale<PX>(pixels,i,d,scale);
-		}
+#ifndef FASTLED_RGBW
+            b.bytes[i] = pixels.template loadAndScale<PX>(pixels, i, d, scale);
+#endif
+        }
 
-		for(register uint32_t i = USED_LANES; i < 8; i++) {
-			while((__clock_cycles() - last_mark) < (T1+T2+T3));
-			last_mark = __clock_cycles();
-			*FastPin<FIRST_PIN>::sport() = PIN_MASK;
+        for (register uint32_t i = USED_LANES; i < 8; i++) {
+            while ((__clock_cycles() - last_mark) < (T1 + T2 + T3));
+            last_mark = __clock_cycles();
+            *FastPin<FIRST_PIN>::sport() = PIN_MASK;
 
-			uint32_t nword = (uint32_t)(~b2.bytes[7-i]);
-			while((__clock_cycles() - last_mark) < (T1-6));
-			*FastPin<FIRST_PIN>::cport() = FIX_BITS(nword);
+            uint32_t nword = (uint32_t) (~b2.bytes[7 - i]);
+            while ((__clock_cycles() - last_mark) < (T1 - 6));
+            *FastPin<FIRST_PIN>::cport() = FIX_BITS(nword);
 
-			while((__clock_cycles() - last_mark) < (T1+T2));
-			*FastPin<FIRST_PIN>::cport() = PIN_MASK;
-		}
-	}
+            while ((__clock_cycles() - last_mark) < (T1 + T2));
+            *FastPin<FIRST_PIN>::cport() = PIN_MASK;
+        }
+    }
 
-  // This method is made static to force making register Y available to use for data on AVR - if the method is non-static, then
-	// gcc will use register Y for the this pointer.
-		static uint32_t ICACHE_RAM_ATTR showRGBInternal(PixelController<RGB_ORDER, LANES, PORT_MASK> &allpixels) {
+    // This method is made static to force making register Y available to use for data on AVR - if the method is non-static, then
+    // gcc will use register Y for the this pointer.
+    static uint32_t ICACHE_RAM_ATTR
+    showRGBInternal(PixelController<RGB_ORDER, LANES, PORT_MASK>
+                    &allpixels) {
+#ifdef FASTLED_RGBW
+        RGBWLines output;
 
-		// Setup the pixel controller and load/scale the first byte
-		Lines b0;
+        for (int i=0; i < USED_LANES; i++) {
+            output.c0.bytes[i] = allpixels.loadAndScale0(i);
+        }
+#else
+        // Setup the pixel controller and load/scale the first byte
+        Lines b0;
 
-		for(int i = 0; i < USED_LANES; i++) {
-			b0.bytes[i] = allpixels.loadAndScale0(i);
-		}
-		allpixels.preStepFirstByteDithering();
+        for (int i = 0; i < USED_LANES; i++) {
+            b0.bytes[i] = allpixels.loadAndScale0(i);
+        }
+#endif
+        allpixels.preStepFirstByteDithering();
 
-		os_intr_lock();
-		uint32_t _start = __clock_cycles();
-		uint32_t last_mark = _start;
+        os_intr_lock();
+        uint32_t _start = __clock_cycles();
+        uint32_t last_mark = _start;
 
-		while(allpixels.has(1)) {
-			// Write first byte, read next byte
-			writeBits<8+XTRA0,1>(last_mark, b0, allpixels);
+        while (allpixels.has(1)) {
+#ifdef FASTLED_RGBW
+            for (int i=0; i < USED_LANES; i++) {
+                output.c1.bytes[i] = allpixels.loadAndScale1(i);
+                output.c2.bytes[i] = allpixels.loadAndScale2(i);
+            }
 
-			// Write second byte, read 3rd byte
-			writeBits<8+XTRA0,2>(last_mark, b0, allpixels);
-			allpixels.advanceData();
+            output.toRgbw<USED_LANES>();
 
-			// Write third byte
-			writeBits<8+XTRA0,0>(last_mark, b0, allpixels);
+            // Write first byte, read next byte
+            writeBits<8 + XTRA0, 1>(last_mark, output.c0, allpixels);
 
-      #if (FASTLED_ALLOW_INTERRUPTS == 1)
-			os_intr_unlock();
-			#endif
+            // Write second byte, read 3rd byte
+            writeBits<8 + XTRA0, 2>(last_mark, output.c1, allpixels);
+            allpixels.advanceData();
 
-			allpixels.stepDithering();
+            // Write second byte, read 3rd byte
+            writeBits<8 + XTRA0, 3>(last_mark, output.c2, allpixels);
 
-			#if (FASTLED_ALLOW_INTERRUPTS == 1)
-      os_intr_lock();
-			// if interrupts took longer than 45µs, punt on the current frame
-			if((int32_t)(__clock_cycles()-last_mark) > 0) {
-				if((int32_t)(__clock_cycles()-last_mark) > (T1+T2+T3+((WAIT_TIME-INTERRUPT_THRESHOLD)*CLKS_PER_US))) { os_intr_unlock(); return 0; }
-			}
-			#endif
-		};
+            // Write third byte
+            writeBits<8 + XTRA0, 0>(last_mark, output.c3, allpixels);
 
-    os_intr_unlock();
-		#ifdef FASTLED_DEBUG_COUNT_FRAME_RETRIES
-		_frame_cnt++;
-		#endif
-    return __clock_cycles() - _start;
-	}
+            allpixels.advanceData();
+            for (int i=0; i < USED_LANES; i++) {
+                output.c0.bytes[i] = allpixels.loadAndScale0(i);
+            }
+#else
+            // Write first byte, read next byte
+            writeBits<8 + XTRA0, 1>(last_mark, b0, allpixels);
+
+            // Write second byte, read 3rd byte
+            writeBits<8 + XTRA0, 2>(last_mark, b0, allpixels);
+            allpixels.advanceData();
+
+            // Write third byte
+            writeBits<8 + XTRA0, 0>(last_mark, b0, allpixels);
+#endif
+#if (FASTLED_ALLOW_INTERRUPTS == 1)
+            os_intr_unlock();
+#endif
+
+            allpixels.stepDithering();
+
+#if (FASTLED_ALLOW_INTERRUPTS == 1)
+            os_intr_lock();
+            // if interrupts took longer than 45µs, punt on the current frame
+            if ((int32_t) (__clock_cycles() - last_mark) > 0) {
+                if ((int32_t) (__clock_cycles() - last_mark) >
+                    (T1 + T2 + T3 + ((WAIT_TIME - INTERRUPT_THRESHOLD) * CLKS_PER_US))) {
+                    os_intr_unlock();
+                    return 0;
+                }
+            }
+#endif
+        };
+
+        os_intr_unlock();
+#ifdef FASTLED_DEBUG_COUNT_FRAME_RETRIES
+        _frame_cnt++;
+#endif
+        return __clock_cycles() - _start;
+    }
 };
 
 FASTLED_NAMESPACE_END
