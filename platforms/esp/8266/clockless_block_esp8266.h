@@ -32,7 +32,7 @@ typedef struct {
     template<int NUM_LANES>
     __attribute__((always_inline)) inline  uint8_t toRgbw() {
         for(int i=0; i < NUM_LANES; i++) {
-            c3.bytes[i] = min(c0.bytes[i], min(c1.bytes[i], c2.bytes[i]));
+            c3.bytes[i] = MIN(c0.bytes[i], MIN(c1.bytes[i], c2.bytes[i]));
             c0.bytes[i] -= c3.bytes[i];
             c1.bytes[i] -= c3.bytes[i];
             c2.bytes[i] -= c3.bytes[i];
