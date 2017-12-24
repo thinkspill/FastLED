@@ -169,7 +169,6 @@ public:
 
             // Write second byte, read 3rd byte
             writeBits<8 + XTRA0, 2>(last_mark, output.c1, allpixels);
-            allpixels.advanceData();
 
             // Write second byte, read 3rd byte
             writeBits<8 + XTRA0, 3>(last_mark, output.c2, allpixels);
