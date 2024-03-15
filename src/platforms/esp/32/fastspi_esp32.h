@@ -47,29 +47,44 @@ FASTLED_NAMESPACE_BEGIN
 
 #include<SPI.h>
 
-#ifndef FASTLED_ESP32_SPI_BUS
-    #define FASTLED_ESP32_SPI_BUS VSPI
+// Conditional compilation for ESP32-S3 to utilize its flexible SPI capabilities
+#if CONFIG_IDF_TARGET_ESP32S3
+	#pragma message "Targeting ESP32S3, which has better SPI support. Configuring for flexible pin assignment."
+	#undef FASTLED_ESP32_SPI_BUS
+	// I *think* we have to "fake" being FSPI... there might be a better way to do this.
+	// whatever the case, this "tricks" the pin assignment defines below into using DATA_PIN & CLOCK_PIN
+	#define FASTLED_ESP32_SPI_BUS FSPI
+
+#else // Configuration for other ESP32 variants
+	#ifndef FASTLED_ESP32_SPI_BUS
+	#define FASTLED_ESP32_SPI_BUS VSPI
+#endif
+
+// Default pin assignments for VSPI and HSPI
+#if FASTLED_ESP32_SPI_BUS == VSPI
+#pragma message "VSPI selected"
+static int8_t spiClk = 18;
+static int8_t spiMiso = 19;
+static int8_t spiMosi = 23;
+static int8_t spiCs = 5;
+#elif FASTLED_ESP32_SPI_BUS == HSPI
+#pragma message "HSPI selected"
+static int8_t spiClk = 14;
+static int8_t spiMiso = 12;
+static int8_t spiMosi = 13;
+static int8_t spiCs = 15;
+#elif FASTLED_ESP32_SPI_BUS == FSPI
+#pragma message "FSPI for flexible pin routing on some ESP32 chips"
+#define spiMosi DATA_PIN
+#define spiClk CLOCK_PIN
+// MISO and CS are not used in LED output, set to -1
+#define spiMiso -1
+#define spiCs -1
+#endif
 #endif
 
 static SPIClass ledSPI(FASTLED_ESP32_SPI_BUS);
 
-
-#if FASTLED_ESP32_SPI_BUS == VSPI
-    static int8_t spiClk = 18;
-    static int8_t spiMiso = 19;
-    static int8_t spiMosi = 23;
-    static int8_t spiCs = 5;
-#elif FASTLED_ESP32_SPI_BUS == HSPI
-    static int8_t spiClk = 14;
-    static int8_t spiMiso = 12;
-    static int8_t spiMosi = 13;
-    static int8_t spiCs = 15;
-#elif FASTLED_ESP32_SPI_BUS == FSPI  // ESP32S2 can re-route to arbitrary pins
-    #define spiMosi DATA_PIN
-    #define spiClk CLOCK_PIN
-    #define spiMiso -1
-    #define spiCs -1
-#endif
 
 template <uint8_t DATA_PIN, uint8_t CLOCK_PIN, uint32_t SPI_SPEED>
 class ESP32SPIOutput {
