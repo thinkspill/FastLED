@@ -54,33 +54,33 @@ FASTLED_NAMESPACE_BEGIN
 	// I *think* we have to "fake" being FSPI... there might be a better way to do this.
 	// whatever the case, this "tricks" the pin assignment defines below into using DATA_PIN & CLOCK_PIN
 	#define FASTLED_ESP32_SPI_BUS FSPI
-
 #else // Configuration for other ESP32 variants
 	#ifndef FASTLED_ESP32_SPI_BUS
-	#define FASTLED_ESP32_SPI_BUS VSPI
+		#pragma message "Setting ESP32 SPI bus to VSPI by default"
+		#define FASTLED_ESP32_SPI_BUS VSPI
+	#endif
 #endif
 
 // Default pin assignments for VSPI and HSPI
 #if FASTLED_ESP32_SPI_BUS == VSPI
-#pragma message "VSPI selected"
-static int8_t spiClk = 18;
-static int8_t spiMiso = 19;
-static int8_t spiMosi = 23;
-static int8_t spiCs = 5;
+	#pragma message "VSPI selected"
+	static int8_t spiClk = 18;
+	static int8_t spiMiso = 19;
+	static int8_t spiMosi = 23;
+	static int8_t spiCs = 5;
 #elif FASTLED_ESP32_SPI_BUS == HSPI
-#pragma message "HSPI selected"
-static int8_t spiClk = 14;
-static int8_t spiMiso = 12;
-static int8_t spiMosi = 13;
-static int8_t spiCs = 15;
+	#pragma message "HSPI selected"
+	static int8_t spiClk = 14;
+	static int8_t spiMiso = 12;
+	static int8_t spiMosi = 13;
+	static int8_t spiCs = 15;
 #elif FASTLED_ESP32_SPI_BUS == FSPI
-#pragma message "FSPI for flexible pin routing on some ESP32 chips"
-#define spiMosi DATA_PIN
-#define spiClk CLOCK_PIN
-// MISO and CS are not used in LED output, set to -1
-#define spiMiso -1
-#define spiCs -1
-#endif
+	#pragma message "FSPI for flexible pin routing on some ESP32 chips"
+	#define spiMosi DATA_PIN
+	#define spiClk CLOCK_PIN
+	// MISO and CS are not used in LED output, set to -1
+	#define spiMiso -1
+	#define spiCs -1
 #endif
 
 static SPIClass ledSPI(FASTLED_ESP32_SPI_BUS);
