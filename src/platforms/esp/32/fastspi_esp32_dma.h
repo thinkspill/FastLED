@@ -1,110 +1,270 @@
 #pragma once
+#pragma message "ESP32 Hardware SPI support added"
 
+FASTLED_NAMESPACE_BEGIN
 
+/*
+ * ESP32 Hardware SPI Driver
+ *
+ * Copyright (c) 2020 Nick Wallace
+ * Derived from code for ESP8266 hardware SPI by Benoit Anastay.
+ *
+ * This hardware SPI implementation can drive clocked LEDs from either the
+ * VSPI or HSPI bus (aka SPI2 & SPI3). No support is provided for SPI1, because it is
+ * shared among devices and the cache for data (code) in the Flash as well as the PSRAM.
+ *
+ * To enable the hardware SPI driver, add the following line *before* including
+ * FastLED.h:
+ *
+ * #define FASTLED_ALL_PINS_HARDWARE_SPI
+ *
+ * This driver uses the VSPI bus by default (GPIO 18, 19, 23, & 5). To use the
+ * HSPI bus (GPIO 14, 12, 13, & 15) add the following line *before* including
+ * FastLED.h:
+ *
+ * #define FASTLED_ESP32_SPI_BUS HSPI
+ *
+ */
+/*
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
 
-#include "driver/spi_master.h"
-#include "esp_log.h"
+#include <SPI.h>
 
-class ESP32DMAController
+// Conditional compilation for ESP32-S3 to utilize its flexible SPI capabilities
+#if CONFIG_IDF_TARGET_ESP32S3
+#pragma message "Targeting ESP32S3, which has better SPI support. Configuring for flexible pin assignment."
+#undef FASTLED_ESP32_SPI_BUS
+#define FASTLED_ESP32_SPI_BUS FSPI
+// Define SPI pins, assuming DATA_PIN and CLOCK_PIN are user-defined for maximum flexibility
+#define spiMosi DATA_PIN
+#define spiClk CLOCK_PIN
+// MISO and CS are not used in LED output, set to -1
+#define spiMiso -1
+#define spiCs -1
+#else // Configuration for other ESP32 variants
+#ifndef FASTLED_ESP32_SPI_BUS
+#define FASTLED_ESP32_SPI_BUS VSPI
+#endif
+
+// Default pin assignments for VSPI and HSPI
+#if FASTLED_ESP32_SPI_BUS == VSPI
+#pragma message "VSPI selected"
+static int8_t spiClk = 18;
+static int8_t spiMiso = 19;
+static int8_t spiMosi = 23;
+static int8_t spiCs = 5;
+#elif FASTLED_ESP32_SPI_BUS == HSPI
+#pragma message "HSPI selected"
+static int8_t spiClk = 14;
+static int8_t spiMiso = 12;
+static int8_t spiMosi = 13;
+static int8_t spiCs = 15;
+#elif FASTLED_ESP32_SPI_BUS == FSPI
+#pragma message "FSPI for flexible pin routing on some ESP32 chips"
+#define spiMosi DATA_PIN
+#define spiClk CLOCK_PIN
+// MISO and CS are not used in LED output, set to -1
+#define spiMiso -1
+#define spiCs -1
+#endif
+#endif
+
+// stolen from another library. This is for SK9822's but should be okay for APA102 as well
+#define LED_STRIP_SPI_FRAME_SK9822_START_SIZE (4) ///< The size in bytes of start frame.
+#define LED_STRIP_SPI_FRAME_SK9822_LED_SIZE (4)   ///< The size in bytes of each LED frame.
+#define LED_STRIP_SPI_FRAME_SK9822_LEDS_SIZE(N_PIXEL)                                                                  \
+    (LED_STRIP_SPI_FRAME_SK9822_LED_SIZE *                                                                             \
+     N_PIXEL) ///< Total size in bytes of all LED frames in a strip. `N_PIXEL` is the number of pixels in the strip.
+#define LED_STRIP_SPI_FRAME_SK9822_RESET_SIZE (4) ///< The size in bytes of reset frame.
+#define LED_STRIP_SPI_FRAME_SK9822_END_SIZE(N_PIXEL)                                                                   \
+    ((N_PIXEL / 16) + 1) ///< The size in bytes of the last frame. `N_PIXEL` is the number of pixels in the strip.
+
+#define LED_STRIP_SPI_FRAME_SK9822_LED_MSB3                                                                            \
+    (0xE0) ///< A magic number of [31:29] in LED frames. The bits must be 1 (APA102, SK9822)
+
+#define LED_STRIP_SPI_FRAME_SK9822_LED_BRIGHTNESS_BITS                                                                 \
+    (5) ///< Number of bits used to describe the brightness of the LED
+
+#define LED_STRIP_SPI_BUFFER_SIZE(N_PIXEL)                                                                             \
+    (LED_STRIP_SPI_FRAME_SK9822_START_SIZE + LED_STRIP_SPI_FRAME_SK9822_LEDS_SIZE(N_PIXEL) +                           \
+     LED_STRIP_SPI_FRAME_SK9822_RESET_SIZE +                                                                           \
+     LED_STRIP_SPI_FRAME_SK9822_END_SIZE(                                                                              \
+         N_PIXEL)) ///< A macro to caliculate required size of buffer. `N_PIXEL` is the number of pixels in the strip.
+
+static SPIClass ledSPI(FASTLED_ESP32_SPI_BUS);
+
+template <uint8_t DATA_PIN, uint8_t CLOCK_PIN, uint32_t SPI_SPEED> class ESP32SPIOutput
 {
-public:
-  ESP32DMAController(uint8_t DATA_PIN, uint8_t CLOCK_PIN, uint32_t SPI_SPEED, uint32_t numLeds);
-    // -- Get or create the pixel data buffer for DMA
-    uint8_t *getPixelBuffer(int size_in_bytes);
-
-    // the good stuff... we actually send stuff out
-		void IRAM_ATTR showPixels();
-
-  private:
-};
-
-template <int DATA_PIN, int CLOCK_PIN, EOrder RGB_ORDER = RGB, uint32_t SPI_SPEED>
-class DMAController : public CPixelLEDController<RGB_ORDER>
-{
-  private:
-    // -- The actual controller object for ESP32
-    ESP32DMAController mDMAController;
-
-    // -- Verify that the pin is valid
-    static_assert(FastPin<DATA_PIN>::validpin(), "Invalid pin specified");
-    static_assert(FastPin<CLOCK_PIN>::validpin(), "Invalid pin specified");
+    Selectable *m_pSelect;
+    void *dmaBuffer;
+    int numLeds;
 
   public:
-    DMAController() : ESP32DMAController(DATA_PIN, CLOCK_PIN, SPI_SPEED)
+    // Verify that the pins are valid
+    static_assert(FastPin<DATA_PIN>::validpin(), "Invalid data pin specified");
+    static_assert(FastPin<CLOCK_PIN>::validpin(), "Invalid clock pin specified");
+
+    ESP32SPIOutput()
+    {
+        m_pSelect = NULL;
+    }
+    ESP32SPIOutput(Selectable *pSelect)
+    {
+        m_pSelect = pSelect;
+    }
+    void setSelect(Selectable *pSelect)
+    {
+        m_pSelect = pSelect;
+    }
+
+    void init(int numLeds)
+    {
+        this->numLeds = num;
+
+        release();
+    }
+
+    // stop the SPI output.  Pretty much a NOP with software, as there's no registers to kick
+    static void stop()
     {
     }
 
-    void init()
+    // wait until the SPI subsystem is ready for more data to write.  A NOP when bitbanging
+    static void wait() __attribute__((always_inline))
     {
     }
-
-    virtual uint16_t getMaxRefreshRate() const
+    static void waitFully() __attribute__((always_inline))
     {
-        return 400;
+        wait();
     }
 
-  protected:
-    // -- Load pixel data
-    //    This method loads all of the pixel data into a separate buffer for use by
-    //    by the RMT driver. Copying does two important jobs: it fixes the color
-    //    order for the pixels, and it performs the scaling/adjusting ahead of time.
-    //    It also packs the bytes into 32 bit chunks with the right bit order.
-    void loadPixelData(PixelController<RGB_ORDER> &pixels)
+    static void writeByteNoWait(uint8_t b) __attribute__((always_inline))
     {
-        // -- Make sure the buffer is allocated
-        int size_in_bytes = pixels.size() * 3;
-        uint8_t *pData = mRMTController.getPixelBuffer(size_in_bytes);
+        writeByte(b);
+    }
+    static void writeBytePostWait(uint8_t b) __attribute__((always_inline))
+    {
+        writeByte(b);
+        wait();
+    }
 
-        // -- This might be faster
+    static void writeWord(uint16_t w) __attribute__((always_inline))
+    {
+        writeByte(w >> 8);
+        writeByte(w & 0xFF);
+    }
+
+    // naive writeByte implelentation, simply calls writeBit on the 8 bits in the byte.
+    static void writeByte(uint8_t b)
+    {
+        ledSPI.transfer(b);
+    }
+
+  public:
+    // select the SPI output (TODO: research whether this really means hi or lo.  Alt TODO: move select responsibility
+    // out of the SPI classes entirely, make it up to the caller to remember to lock/select the line?)
+    void select()
+    {
+        ledSPI.beginTransaction(SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE0));
+        if (m_pSelect != NULL)
+        {
+            m_pSelect->select();
+        }
+    }
+
+    // release the SPI line
+    void release()
+    {
+        if (m_pSelect != NULL)
+        {
+            m_pSelect->release();
+        }
+        ledSPI.endTransaction();
+    }
+
+    // Write out len bytes of the given value out over ledSPI.  Useful for quickly flushing, say, a line of 0's down the
+    // line.
+    void writeBytesValue(uint8_t value, int len)
+    {
+        select();
+        writeBytesValueRaw(value, len);
+        release();
+    }
+
+    static void writeBytesValueRaw(uint8_t value, int len)
+    {
+        while (len--)
+        {
+            ledSPI.transfer(value);
+        }
+    }
+
+    // write a block of len uint8_ts out.  Need to type this better so that explicit casts into the call aren't
+    // required. note that this template version takes a class parameter for a per-byte modifier to the data.
+    template <class D> void writeBytes(FASTLED_REGISTER uint8_t *data, int len)
+    {
+        select();
+        uint8_t *end = data + len;
+        while (data != end)
+        {
+            writeByte(D::adjust(*data++));
+        }
+        D::postBlock(len);
+        release();
+    }
+
+    // default version of writing a block of data out to the SPI port, with no data modifications being made
+    void writeBytes(FASTLED_REGISTER uint8_t *data, int len)
+    {
+        writeBytes<DATA_NOP>(data, len);
+    }
+
+    // write a single bit out, which bit from the passed in byte is determined by template parameter
+    template <uint8_t BIT> inline void writeBit(uint8_t b)
+    {
+        ledSPI.transfer(b);
+    }
+
+    // write a block of uint8_ts out in groups of three.  len is the total number of uint8_ts to write out.  The
+    // template parameters indicate how many uint8_ts to skip at the beginning of each grouping, as well as a class
+    // specifying a per byte of data modification to be made.  (See DATA_NOP above)
+    template <uint8_t FLAGS, class D, EOrder RGB_ORDER>
+    __attribute__((noinline)) void writePixels(PixelController<RGB_ORDER> pixels)
+    {
+        select();
+        int len = pixels.mLen;
         while (pixels.has(1))
         {
-            *pData++ = pixels.loadAndScale0();
-            *pData++ = pixels.loadAndScale1();
-            *pData++ = pixels.loadAndScale2();
+            if (FLAGS & FLAG_START_BIT)
+            {
+                writeBit<0>(1);
+            }
+            writeByte(D::adjust(pixels.loadAndScale0()));
+            writeByte(D::adjust(pixels.loadAndScale1()));
+            writeByte(D::adjust(pixels.loadAndScale2()));
             pixels.advanceData();
             pixels.stepDithering();
         }
-    }
-
-    // -- Show pixels
-    //    This is the main entry point for the controller.
-    virtual void showPixels(PixelController<RGB_ORDER> &pixels)
-    {
-        if (FASTLED_RMT_BUILTIN_DRIVER)
-        {
-            convertAllPixelData(pixels);
-        }
-        else
-        {
-            loadPixelData(pixels);
-        }
-
-        mRMTController.showPixels();
-    }
-
-    // -- Convert all pixels to RMT pulses
-    //    This function is only used when the user chooses to use the
-    //    built-in RMT driver, which needs all of the RMT pulses
-    //    up-front.
-    void convertAllPixelData(PixelController<RGB_ORDER> &pixels)
-    {
-        // -- Make sure the data buffer is allocated
-        mRMTController.initPulseBuffer(pixels.size() * 3);
-
-        // -- Cycle through the R,G, and B values in the right order,
-        //    storing the pulses in the big buffer
-
-        uint32_t byteval;
-        while (pixels.has(1))
-        {
-            byteval = pixels.loadAndScale0();
-            mRMTController.convertByte(byteval);
-            byteval = pixels.loadAndScale1();
-            mRMTController.convertByte(byteval);
-            byteval = pixels.loadAndScale2();
-            mRMTController.convertByte(byteval);
-            pixels.advanceData();
-            pixels.stepDithering();
-        }
+        D::postBlock(len);
+        release();
     }
 };
+
+FASTLED_NAMESPACE_END
