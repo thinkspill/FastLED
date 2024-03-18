@@ -45,76 +45,40 @@ FASTLED_NAMESPACE_BEGIN
  * THE SOFTWARE.
  */
 
-#include <SPI.h>
+#include <driver/spi_master.h>
 
 // Conditional compilation for ESP32-S3 to utilize its flexible SPI capabilities
 #if CONFIG_IDF_TARGET_ESP32S3
 #pragma message "Targeting ESP32S3, which has better SPI support. Configuring for flexible pin assignment."
-#undef FASTLED_ESP32_SPI_BUS
-#define FASTLED_ESP32_SPI_BUS FSPI
-// Define SPI pins, assuming DATA_PIN and CLOCK_PIN are user-defined for maximum flexibility
-#define spiMosi DATA_PIN
-#define spiClk CLOCK_PIN
-// MISO and CS are not used in LED output, set to -1
-#define spiMiso -1
-#define spiCs -1
+#pragma message "DATA_PIN and CLOCK_PIN are used"
 #else // Configuration for other ESP32 variants
-#ifndef FASTLED_ESP32_SPI_BUS
-#define FASTLED_ESP32_SPI_BUS VSPI
+#pragma error "DMA is only tested to work on ESP32-S3 chips"
 #endif
 
-// Default pin assignments for VSPI and HSPI
-#if FASTLED_ESP32_SPI_BUS == VSPI
-#pragma message "VSPI selected"
-static int8_t spiClk = 18;
-static int8_t spiMiso = 19;
-static int8_t spiMosi = 23;
-static int8_t spiCs = 5;
-#elif FASTLED_ESP32_SPI_BUS == HSPI
-#pragma message "HSPI selected"
-static int8_t spiClk = 14;
-static int8_t spiMiso = 12;
-static int8_t spiMosi = 13;
-static int8_t spiCs = 15;
-#elif FASTLED_ESP32_SPI_BUS == FSPI
-#pragma message "FSPI for flexible pin routing on some ESP32 chips"
-#define spiMosi DATA_PIN
-#define spiClk CLOCK_PIN
-// MISO and CS are not used in LED output, set to -1
-#define spiMiso -1
-#define spiCs -1
-#endif
+/**
+ * Default DMA channel to use. Default is `SPI_DMA_CH_AUTO` for ESP-IDF v4.3
+ * and newer, 1 for older versions.
+ */
+
+#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(4, 3, 0)
+#define LED_STRIP_SPI_DEFAULT_DMA_CHAN (1)
+#else
+#define LED_STRIP_SPI_DEFAULT_DMA_CHAN SPI_DMA_CH_AUTO
 #endif
 
-// stolen from another library. This is for SK9822's but should be okay for APA102 as well
-#define LED_STRIP_SPI_FRAME_SK9822_START_SIZE (4) ///< The size in bytes of start frame.
-#define LED_STRIP_SPI_FRAME_SK9822_LED_SIZE (4)   ///< The size in bytes of each LED frame.
-#define LED_STRIP_SPI_FRAME_SK9822_LEDS_SIZE(N_PIXEL)                                                                  \
-    (LED_STRIP_SPI_FRAME_SK9822_LED_SIZE *                                                                             \
-     N_PIXEL) ///< Total size in bytes of all LED frames in a strip. `N_PIXEL` is the number of pixels in the strip.
-#define LED_STRIP_SPI_FRAME_SK9822_RESET_SIZE (4) ///< The size in bytes of reset frame.
-#define LED_STRIP_SPI_FRAME_SK9822_END_SIZE(N_PIXEL)                                                                   \
-    ((N_PIXEL / 16) + 1) ///< The size in bytes of the last frame. `N_PIXEL` is the number of pixels in the strip.
-
-#define LED_STRIP_SPI_FRAME_SK9822_LED_MSB3                                                                            \
-    (0xE0) ///< A magic number of [31:29] in LED frames. The bits must be 1 (APA102, SK9822)
-
-#define LED_STRIP_SPI_FRAME_SK9822_LED_BRIGHTNESS_BITS                                                                 \
-    (5) ///< Number of bits used to describe the brightness of the LED
-
-#define LED_STRIP_SPI_BUFFER_SIZE(N_PIXEL)                                                                             \
-    (LED_STRIP_SPI_FRAME_SK9822_START_SIZE + LED_STRIP_SPI_FRAME_SK9822_LEDS_SIZE(N_PIXEL) +                           \
-     LED_STRIP_SPI_FRAME_SK9822_RESET_SIZE +                                                                           \
-     LED_STRIP_SPI_FRAME_SK9822_END_SIZE(                                                                              \
-         N_PIXEL)) ///< A macro to caliculate required size of buffer. `N_PIXEL` is the number of pixels in the strip.
-
-static SPIClass ledSPI(FASTLED_ESP32_SPI_BUS);
+static const char *SPI_TAG = "fastspi_esp32_dma";
 
 template <uint8_t DATA_PIN, uint8_t CLOCK_PIN, uint32_t SPI_SPEED> class ESP32SPIOutput
 {
-    Selectable *m_pSelect;
     void *dmaBuffer;
-    int numLeds;
+    size_t bufferSize;
+    spi_host_device_t host_device;     //< SPI host device name, such as `SPI2_HOST`.
+    int max_transfer_sz;               ///< Maximum transfer size in bytes. Defaults to 4094 if 0.
+    int queue_size;                    ///< Queue size used by `spi_device_queue_trans()`.
+    spi_device_handle_t device_handle; ///< Device handle assigned by the driver. The caller must provide this.
+    int dma_chan;                      ///< DMA channel to use. Either 1 or 2.
+    spi_transaction_t transaction;     ///< SPI transaction used internally by the driver.
+    int bytePosition;                  // the position we are at in the DMA buffer
 
   public:
     // Verify that the pins are valid
@@ -123,89 +87,149 @@ template <uint8_t DATA_PIN, uint8_t CLOCK_PIN, uint32_t SPI_SPEED> class ESP32SP
 
     ESP32SPIOutput()
     {
-        m_pSelect = NULL;
-    }
-    ESP32SPIOutput(Selectable *pSelect)
-    {
-        m_pSelect = pSelect;
-    }
-    void setSelect(Selectable *pSelect)
-    {
-        m_pSelect = pSelect;
     }
 
-    void init(int numLeds)
+    esp_err_t init(size_t bufferSize)
     {
-        this->numLeds = num;
 
-        release();
-    }
+        esp_err_t err = ESP_FAIL;
 
-    // stop the SPI output.  Pretty much a NOP with software, as there's no registers to kick
-    static void stop()
-    {
-    }
+        this->bufferSize = bufferSize;
 
-    // wait until the SPI subsystem is ready for more data to write.  A NOP when bitbanging
-    static void wait() __attribute__((always_inline))
-    {
-    }
-    static void waitFully() __attribute__((always_inline))
-    {
-        wait();
-    }
+        spi_bus_config_t bus_config = {
+            .mosi_io_num = DATA_PIN,
+            .sclk_io_num = CLOCK_PIN,
+            .miso_io_num = -1,
+            .quadhd_io_num = -1,
+            .quadwp_io_num = -1,
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 4, 0)
+            .data4_io_num = -1,
+            .data5_io_num = -1,
+            .data6_io_num = -1,
+#endif
+            .flags = SPICOMMON_BUSFLAG_MASTER,
+            .max_transfer_sz = this->max_transfer_sz,
+        };
+        spi_device_interface_config_t device_interface_config = {
+            .clock_speed_hz = SPI_SPEED * 1000000, // translate from MHz to Hz
+            .mode = SPI_MODE3,
+            .spics_io_num = -1,
+            .queue_size = this->bufferSize,
+            .command_bits = 0,
+            .address_bits = 0,
+            .dummy_bits = 0,
+        };
 
-    static void writeByteNoWait(uint8_t b) __attribute__((always_inline))
-    {
-        writeByte(b);
-    }
-    static void writeBytePostWait(uint8_t b) __attribute__((always_inline))
-    {
-        writeByte(b);
-        wait();
-    }
+        this->dmaBuffer = heap_caps_malloc(this->bufferSize, MALLOC_CAP_DMA | MALLOC_CAP_32BIT);
+        if (this->dmaBuffer == NULL)
+        {
+            ESP_LOGE(SPI_TAG, "heap_caps_malloc()");
+            err = ESP_ERR_NO_MEM;
+            return err;
+        }
+        memset(this->dmaBuffer, 0, this->bufferSize);
 
-    static void writeWord(uint16_t w) __attribute__((always_inline))
-    {
-        writeByte(w >> 8);
-        writeByte(w & 0xFF);
-    }
+        /* XXX length is in bit */
+        this->transaction.length = this->bufferSize * 8;
 
-    // naive writeByte implelentation, simply calls writeBit on the 8 bits in the byte.
-    static void writeByte(uint8_t b)
-    {
-        ledSPI.transfer(b);
-    }
+        ESP_LOGD(SPI_TAG, "SPI buffer initialized");
 
+        err = spi_bus_initialize(this->host_device, &bus_config, this->dma_chan);
+        if (err != ESP_OK)
+        {
+            ESP_LOGE(SPI_TAG, "spi_bus_initialize(): %s", esp_err_to_name(err));
+            return err;
+        }
+        ESP_LOGD(SPI_TAG, "SPI bus initialized");
+
+        err = spi_bus_add_device(this->host_device, &device_interface_config, &this->device_handle);
+        if (err != ESP_OK)
+        {
+            ESP_LOGE(SPI_TAG, "spi_bus_add_device(): %s", esp_err_to_name(err));
+            return err;
+        }
+        ESP_LOGI(SPI_TAG, "LED strip initialized");
+        return ESP_OK;
+    }
+    /*
+        // stop the SPI output.  Pretty much a NOP with software, as there's no registers to kick
+        static void stop()
+        {
+        }
+
+        // wait until the SPI subsystem is ready for more data to write.  A NOP when bitbanging
+        static void wait() __attribute__((always_inline))
+        {
+        }
+        static void waitFully() __attribute__((always_inline))
+        {
+            wait();
+        }
+
+        static void writeByteNoWait(uint8_t b) __attribute__((always_inline))
+        {
+            writeByte(b);
+        }
+        static void writeBytePostWait(uint8_t b) __attribute__((always_inline))
+        {
+            writeByte(b);
+            wait();
+        }
+
+        static void writeWord(uint16_t w) __attribute__((always_inline))
+        {
+            writeByte(w >> 8);
+            writeByte(w & 0xFF);
+        }
+
+        // naive writeByte implementation, simply calls writeBit on the 8 bits in the byte.
+        static void writeByte(uint8_t b)
+        {
+            ledSPI.transfer(b);
+        }
+    */
   public:
-    // select the SPI output (TODO: research whether this really means hi or lo.  Alt TODO: move select responsibility
-    // out of the SPI classes entirely, make it up to the caller to remember to lock/select the line?)
+    esp_err_t flush()
+    {
+        esp_err_t err = ESP_FAIL;
+        spi_transaction_t *t;
+
+        this->transaction.tx_buffer = this->dmaBuffer;
+        err = spi_device_queue_trans(this->device_handle, &this->transaction, portMAX_DELAY);
+        if (err != ESP_OK)
+        {
+            ESP_LOGE(SPI_TAG, "spi_device_queue_trans(): %s", esp_err_to_name(err));
+            return err;
+        }
+        err = spi_device_get_trans_result(this->device_handle, &t, portMAX_DELAY);
+        if (err != ESP_OK)
+        {
+            ESP_LOGE(SPI_TAG, "spi_device_get_trans_result(): %s", esp_err_to_name(err));
+            return err;
+        }
+        return ESP_OK;
+    }
+
+    // this just resets the position of our byte marker to zero
     void select()
     {
-        ledSPI.beginTransaction(SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE0));
-        if (m_pSelect != NULL)
-        {
-            m_pSelect->select();
-        }
+        bytePosition = 0;
     }
 
-    // release the SPI line
+    // send out the data and then reset our byte position
     void release()
     {
-        if (m_pSelect != NULL)
-        {
-            m_pSelect->release();
-        }
-        ledSPI.endTransaction();
+        this->flush();
+        bytePosition = 0;
     }
-
-    // Write out len bytes of the given value out over ledSPI.  Useful for quickly flushing, say, a line of 0's down the
+    /*
+    NOTE: This doesn't seem to be called or used anywhere...
+    // Write out len bytes of the given value out over ledSPI.  Useful for quickly flushing, say, a line of 0's down
+    the
     // line.
     void writeBytesValue(uint8_t value, int len)
     {
-        select();
         writeBytesValueRaw(value, len);
-        release();
     }
 
     static void writeBytesValueRaw(uint8_t value, int len)
@@ -215,19 +239,26 @@ template <uint8_t DATA_PIN, uint8_t CLOCK_PIN, uint32_t SPI_SPEED> class ESP32SP
             ledSPI.transfer(value);
         }
     }
+    */
+    void writeByte(uint8_t byte)
+    {
+        if (bytePosition >= this->bufferSize)
+            return;
+
+        reinterpret_cast<uint8_t *>(this->dmaBuffer)[bytePosition] = byte;
+        bytePosition++;
+    }
 
     // write a block of len uint8_ts out.  Need to type this better so that explicit casts into the call aren't
     // required. note that this template version takes a class parameter for a per-byte modifier to the data.
     template <class D> void writeBytes(FASTLED_REGISTER uint8_t *data, int len)
     {
-        select();
         uint8_t *end = data + len;
         while (data != end)
         {
             writeByte(D::adjust(*data++));
         }
         D::postBlock(len);
-        release();
     }
 
     // default version of writing a block of data out to the SPI port, with no data modifications being made
@@ -239,31 +270,8 @@ template <uint8_t DATA_PIN, uint8_t CLOCK_PIN, uint32_t SPI_SPEED> class ESP32SP
     // write a single bit out, which bit from the passed in byte is determined by template parameter
     template <uint8_t BIT> inline void writeBit(uint8_t b)
     {
-        ledSPI.transfer(b);
-    }
-
-    // write a block of uint8_ts out in groups of three.  len is the total number of uint8_ts to write out.  The
-    // template parameters indicate how many uint8_ts to skip at the beginning of each grouping, as well as a class
-    // specifying a per byte of data modification to be made.  (See DATA_NOP above)
-    template <uint8_t FLAGS, class D, EOrder RGB_ORDER>
-    __attribute__((noinline)) void writePixels(PixelController<RGB_ORDER> pixels)
-    {
-        select();
-        int len = pixels.mLen;
-        while (pixels.has(1))
-        {
-            if (FLAGS & FLAG_START_BIT)
-            {
-                writeBit<0>(1);
-            }
-            writeByte(D::adjust(pixels.loadAndScale0()));
-            writeByte(D::adjust(pixels.loadAndScale1()));
-            writeByte(D::adjust(pixels.loadAndScale2()));
-            pixels.advanceData();
-            pixels.stepDithering();
-        }
-        D::postBlock(len);
-        release();
+        // TODO: This seems broken
+        this->writeByte(b);
     }
 };
 
