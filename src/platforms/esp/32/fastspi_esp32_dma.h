@@ -4,26 +4,15 @@
 FASTLED_NAMESPACE_BEGIN
 
 /*
- * ESP32 Hardware SPI Driver
+ * ESP32 Hardware DMA-Based SPI Driver
  *
  * Copyright (c) 2020 Nick Wallace
  * Derived from code for ESP8266 hardware SPI by Benoit Anastay.
+ * Derived from code for the esp-idf-component library by:
+ * Copyright (c) 2020 Ruslan V. Uss <unclerus@gmail.com>
+              2021 Tomoyuki Sakurai <y@rombik.org>
  *
- * This hardware SPI implementation can drive clocked LEDs from either the
- * VSPI or HSPI bus (aka SPI2 & SPI3). No support is provided for SPI1, because it is
- * shared among devices and the cache for data (code) in the Flash as well as the PSRAM.
- *
- * To enable the hardware SPI driver, add the following line *before* including
- * FastLED.h:
- *
- * #define FASTLED_ALL_PINS_HARDWARE_SPI
- *
- * This driver uses the VSPI bus by default (GPIO 18, 19, 23, & 5). To use the
- * HSPI bus (GPIO 14, 12, 13, & 15) add the following line *before* including
- * FastLED.h:
- *
- * #define FASTLED_ESP32_SPI_BUS HSPI
- *
+ * led_strip_spi: https://github.com/UncleRus/esp-idf-lib/tree/master/components/led_strip_spi
  */
 /*
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -44,7 +33,6 @@ FASTLED_NAMESPACE_BEGIN
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-
 #include <driver/spi_master.h>
 
 // Conditional compilation for ESP32-S3 to utilize its flexible SPI capabilities
@@ -209,7 +197,13 @@ template <uint8_t DATA_PIN, uint8_t CLOCK_PIN, uint32_t SPI_SPEED> class ESP32SP
         }
         return ESP_OK;
     }
-
+    void beginDMATransaction()
+    {
+    }
+    // this is a noop for right now
+    void waitFully()
+    {
+    }
     // this just resets the position of our byte marker to zero
     void select()
     {
@@ -221,29 +215,16 @@ template <uint8_t DATA_PIN, uint8_t CLOCK_PIN, uint32_t SPI_SPEED> class ESP32SP
     {
         this->flush();
         bytePosition = 0;
-    }
-    /*
-    NOTE: This doesn't seem to be called or used anywhere...
-    // Write out len bytes of the given value out over ledSPI.  Useful for quickly flushing, say, a line of 0's down
-    the
-    // line.
-    void writeBytesValue(uint8_t value, int len)
-    {
-        writeBytesValueRaw(value, len);
+        memset(this->dmaBuffer, 0, this->bufferSize);
     }
 
-    static void writeBytesValueRaw(uint8_t value, int len)
-    {
-        while (len--)
-        {
-            ledSPI.transfer(value);
-        }
-    }
-    */
     void writeByte(uint8_t byte)
     {
         if (bytePosition >= this->bufferSize)
+        {
+            ESP_LOGE(SPI_TAG, "Attempt to write beyond allocated buffer '%d'", this->bufferSize);
             return;
+        }
 
         reinterpret_cast<uint8_t *>(this->dmaBuffer)[bytePosition] = byte;
         bytePosition++;
