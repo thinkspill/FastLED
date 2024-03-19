@@ -79,7 +79,8 @@ template <uint8_t DATA_PIN, uint8_t CLOCK_PIN, uint32_t SPI_SPEED> class ESP32DM
     static_assert(FastPin<DATA_PIN>::validpin(), "Invalid data pin specified");
     static_assert(FastPin<CLOCK_PIN>::validpin(), "Invalid clock pin specified");
 
-    ESP32DMASPIOutput() : host_device(LED_STRIP_SPI_DEFAULT_HOST_DEVICE), dma_chan(LED_STRIP_SPI_DEFAULT_DMA_CHAN)
+    ESP32DMASPIOutput()
+        : host_device(LED_STRIP_SPI_DEFAULT_HOST_DEVICE), dma_chan(LED_STRIP_SPI_DEFAULT_DMA_CHAN), queue_size(1)
     {
     }
 
@@ -108,7 +109,7 @@ template <uint8_t DATA_PIN, uint8_t CLOCK_PIN, uint32_t SPI_SPEED> class ESP32DM
         device_interface_config.clock_speed_hz = SPI_SPEED * 1000000; // translate from MHz to Hz
         device_interface_config.mode = SPI_MODE3;
         device_interface_config.spics_io_num = -1;
-        device_interface_config.queue_size = this->bufferSize;
+        device_interface_config.queue_size = this->queue_size;
         device_interface_config.command_bits = 0;
         device_interface_config.address_bits = 0;
         device_interface_config.dummy_bits = 0;
