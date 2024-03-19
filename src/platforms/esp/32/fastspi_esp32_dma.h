@@ -54,6 +54,13 @@ FASTLED_NAMESPACE_BEGIN
 #define LED_STRIP_SPI_DEFAULT_DMA_CHAN SPI_DMA_CH_AUTO
 #endif
 
+#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(4, 0, 0)
+#define LED_STRIP_SPI_DEFAULT_HOST_DEVICE HSPI_HOST
+#else
+#define LED_STRIP_SPI_DEFAULT_HOST_DEVICE                                                                              \
+    SPI2_HOST ///< Default is `SPI2_HOST` (`HSPI_HOST` if `esp-idf` version is v3.x).
+#endif
+
 static const char *SPI_TAG = "fastspi_esp32_dma";
 
 template <uint8_t DATA_PIN, uint8_t CLOCK_PIN, uint32_t SPI_SPEED> class ESP32DMASPIOutput
@@ -61,7 +68,6 @@ template <uint8_t DATA_PIN, uint8_t CLOCK_PIN, uint32_t SPI_SPEED> class ESP32DM
     void *dmaBuffer;
     size_t bufferSize;
     spi_host_device_t host_device;     //< SPI host device name, such as `SPI2_HOST`.
-    int max_transfer_sz;               ///< Maximum transfer size in bytes. Defaults to 4094 if 0.
     int queue_size;                    ///< Queue size used by `spi_device_queue_trans()`.
     spi_device_handle_t device_handle; ///< Device handle assigned by the driver. The caller must provide this.
     int dma_chan;                      ///< DMA channel to use. Either 1 or 2.
@@ -73,7 +79,7 @@ template <uint8_t DATA_PIN, uint8_t CLOCK_PIN, uint32_t SPI_SPEED> class ESP32DM
     static_assert(FastPin<DATA_PIN>::validpin(), "Invalid data pin specified");
     static_assert(FastPin<CLOCK_PIN>::validpin(), "Invalid clock pin specified");
 
-    ESP32DMASPIOutput()
+    ESP32DMASPIOutput() : host_device(LED_STRIP_SPI_DEFAULT_HOST_DEVICE), dma_chan(LED_STRIP_SPI_DEFAULT_DMA_CHAN)
     {
     }
 
@@ -96,7 +102,7 @@ template <uint8_t DATA_PIN, uint8_t CLOCK_PIN, uint32_t SPI_SPEED> class ESP32DM
         bus_config.data6_io_num = -1;
 #endif
         bus_config.flags = SPICOMMON_BUSFLAG_MASTER;
-        bus_config.max_transfer_sz = this->max_transfer_sz;
+        bus_config.max_transfer_sz = this->bufferSize;
 
         spi_device_interface_config_t device_interface_config = {0};
         device_interface_config.clock_speed_hz = SPI_SPEED * 1000000; // translate from MHz to Hz

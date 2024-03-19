@@ -328,6 +328,7 @@ class APA102Controller : public CPixelLEDController<RGB_ORDER>
         size_t numBytes = sizeof(START_FRAME) + sizeof(END_FRAME) + (sizeof(uint8_t) * 4) * this->m_nLeds;
         mSPI.init(numBytes);
     }
+
 #else
     virtual void init()
     {
